@@ -363,7 +363,11 @@ func acceptAttributedMessage(db *sql.DB, wire wireMessage, principal *Principal)
 			return nil, err
 		}
 	}
-	return m, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	signalCommittedMessage(db)
+	return m, nil
 }
 
 func registeredSender(name, owner, id string) string {

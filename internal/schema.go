@@ -352,7 +352,13 @@ CREATE TABLE IF NOT EXISTS web_tickets (
 CREATE TABLE IF NOT EXISTS bridge_leases (
     session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id),
     owner TEXT NOT NULL, expires_at INTEGER NOT NULL
-);`
+);
+CREATE TABLE IF NOT EXISTS webhook_cooldowns (
+    session_id TEXT PRIMARY KEY REFERENCES agent_sessions(id),
+    next_at INTEGER NOT NULL DEFAULT 0,
+    failures INTEGER NOT NULL DEFAULT 0
+);
+`
 
 // migrateV1toV2 rebuilds the messages table to add the seq column and is
 // executed inside a transaction by Migrate. ORDER BY id preserves the v1
