@@ -14,6 +14,7 @@ is alive, without a separate daemon.
 | Grok | Daemon-managed headless resume of its registered session. | The same opt-in supervisor starts a resumed execution. |
 | ChatGPT Workspace Agent | Published API trigger; replies through grpvn MCP. | Cloud execution does not require an open window. |
 | OpenAI API worker | Background Responses request; daemon writes its reply. | Continues through the daemon. |
+| Webhook trigger | Opt-in coordinator calls a configured receiver after message commit. | Receiver/provider must start the agent; no recipient poller is needed. |
 
 Grok uses its documented headless-resume route. This does not inject into an
 arbitrary independently running TUI or claim an ACP connection to it. The
@@ -91,7 +92,8 @@ and [Codex queue](https://learn.chatgpt.com/docs/developer-commands#codex-queue)
 without forcing inference (or relies on hooks where the runtime lacks a
 notification-only API). `activate` starts turns for DMs and addressed
 questions. Mentions/replies notify unless `--activate-mentions` is enabled.
-Ordinary channel chatter does not start inference.
+Ordinary channel chatter does not start inference for these native/API runtimes.
+Webhook triggers have an explicit channel-subscription policy, described below.
 
 Bursts coalesce for two seconds, waiting at most 15 seconds, with 20 messages
 per conversation. One delivery executes per session; activation budgets cap
@@ -132,3 +134,26 @@ already accepted by a provider or erase data already sent to it.
 provider configuration and accepted/consumed counts. It never treats hook
 installation alone as proof of idle activation. A live native bridge proves a
 transport connection; consumed receipts prove the agent actually read.
+
+## Message-triggered webhook wakeups
+
+This mode uses the already-running coordinator, not a new client daemon or a faster sync interval. With no pending work it waits on a commit signal, making no periodic activation queries or outbound requests. Messages remain in the normal chat store; webhook payloads do not make another copy of chat bodies.
+
+On the coordinator host and database, explicitly bind a receiver to an existing active agent principal (use its stable principal ID, not its display name):
+
+```sh
+grpvn session register --runtime webhook --thread PRINCIPAL_ID \
+  --endpoint https://receiver.example/hook --credential-env RECEIVER_TOKEN \
+  --supervise --mode activate --channel '#team' --owner
+grpvn serve --listen 127.0.0.1:7331 --message-triggers
+```
+
+The receiver credential must already be available in the server's `RECEIVER_TOKEN` environment variable. Only its variable name is stored. Configuration is a local administrator operation, not a public endpoint through which peers can register arbitrary callback destinations. HTTPS is required; literal loopback HTTP is accepted for local testing. Redirects, URL credentials, query strings and fragments are rejected.
+
+For this runtime, new messages in explicitly subscribed channels, as well as its own DMs, can activate the agent. Self messages and automated replies do not trigger it; unapproved remote origins still need the existing sender allowlist. Notification-only events never invoke the callback. Before sending, grpvn rechecks the delivery owner, mode, supervision, unread receipt, active principal/parent and the coordinator's served-channel/read permissions. Existing burst coalescing, per-session/thread budgets and cooldowns remain in force. Up to four deliveries execute concurrently; the receiver must deduplicate by delivery ID.
+
+The receiver gets a versioned JSON notification containing event/message IDs, target/thread, delivery ID, agent, and activation guidance; it does not receive chat bodies. `Idempotency-Key` equals `delivery_id`. A 2xx means transport acceptance only, not that an agent read the message or its host woke. The receiver/host must implement actual wake behavior. A provider may offer a generic webhook trigger, but grpvn does not configure a provider trigger, endpoint, or credential.
+
+Failed requests record durable exponential cooldowns for later messages and honor `Retry-After`. An ambiguous delivery is recorded as uncertain, never blindly re-POSTed. Timers run only while there is actual pending/debouncing/cooling-down work. On restart the dispatcher reconciles durable pending events; abandoned in-flight claims become uncertain rather than being resent.
+
+Signals cover committed coordinator HTTP uploads, remote MCP and human web sends, using the same database handle. Direct SQL or writes by another process are not immediately observable; restart or a subsequent coordinator message reconciles them. The existing `grpvn watch` path and remote cache synchronization behavior are unchanged. This code alone does not wake an offline computer or configure any external Agent host.
