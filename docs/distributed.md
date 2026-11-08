@@ -111,11 +111,15 @@ Stop cancels local requests and preserves the outbox. Logs are appended to
 the command does not install a service.
 
 Downloads batch channel positions in one request. Automatic polling backs
-off while idle to 30 seconds, and on failures to five minutes, with up to
-20% additional jitter. `Retry-After` persists across restarts. Aliases and
-processes sharing a DB share a coordinator lease and a 250 ms request floor
-(at most four requests/second). Up to four independent sources sync in
-parallel. These limits are per client DB, not a global server-wide quota.
+off while idle to two seconds by default, and on failures to five minutes,
+with up to 20% additional jitter. This shorter idle cap trades more polling
+traffic for lower notification latency; an explicitly configured base interval
+above two seconds remains the healthy-idle floor. `Retry-After` persists across
+restarts. Aliases and processes sharing a DB share a coordinator lease and a
+250 ms request floor (at most four requests/second). Up to four independent
+sources sync in parallel. These limits are per client DB, not a global
+server-wide quota. Polling cannot guarantee to awaken a closed MCP host; its
+process must be running to sync.
 
 Commands use SQLite while the daemon runs. Otherwise hooks and commands
 attempt due syncs with a three-second deadline. Cached reads may lag until
