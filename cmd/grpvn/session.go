@@ -178,8 +178,8 @@ var watchCmd = &cobra.Command{Use: "watch", Aliases: []string{"wa"}, Short: "Wat
 
 func init() {
 	f := sessionRegisterCmd.Flags()
-	f.StringVar(&sessionConfig.Runtime, "runtime", "", "codex, claude-channel, opencode, pi, grok, workspace-agent or openai")
-	f.StringVar(&sessionConfig.RuntimeSession, "thread", "", "native session UUID, API worker name, or published agtch_ trigger ID")
+	f.StringVar(&sessionConfig.Runtime, "runtime", "", "codex, claude-channel, opencode, pi, grok, workspace-agent, openai or webhook")
+	f.StringVar(&sessionConfig.RuntimeSession, "thread", "", "native session UUID, API worker name, published agtch_ trigger ID, or webhook agent principal ID")
 	f.StringVar(&sessionConfig.Mode, "mode", "notify", "passive, notify or activate")
 	f.StringSliceVar(&sessionConfig.Channels, "channel", nil, "channel subscriptions (default current follows)")
 	f.StringVar(&sessionConfig.Endpoint, "endpoint", "", "existing runtime server or API base URL")
