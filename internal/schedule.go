@@ -12,7 +12,9 @@ import (
 )
 
 const minRemoteInterval = 250 * time.Millisecond
-const maxIdleInterval = 30 * time.Second
+
+// Frequent healthy checks reduce notification lag, at the cost of more idle traffic.
+const maxIdleInterval = 2 * time.Second
 const maxFailureInterval = 5 * time.Minute
 const syncLeaseTTL = 30 * time.Second
 const maxSyncDuration = 20 * time.Second
@@ -132,7 +134,8 @@ func finishSync(db *sql.DB, r Remote, owner string, base time.Duration, stats Sy
 	} else if stats.Pulled+stats.Pushed == 0 {
 		idle++
 		failures = 0
-		delay = backoff(base, idle, maxIdleInterval)
+		ceiling := max(base, maxIdleInterval)
+		delay = backoff(base, idle, ceiling)
 	} else {
 		idle, failures = 0, 0
 	}

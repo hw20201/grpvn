@@ -154,7 +154,7 @@ func TestSharedPollingBudgetAndRetryAfter(t *testing.T) {
 }
 
 func TestBackoffBounds(t *testing.T) {
-	if got := backoff(time.Second, 100, maxIdleInterval); got != 30*time.Second {
+	if got := backoff(time.Second, 100, maxIdleInterval); got != 2*time.Second {
 		t.Fatal(got)
 	}
 	if got := backoff(time.Second, 100, maxFailureInterval); got != 5*time.Minute {
@@ -162,5 +162,71 @@ func TestBackoffBounds(t *testing.T) {
 	}
 	if got := backoff(time.Millisecond, 0, maxIdleInterval); got != minRemoteInterval {
 		t.Fatal(got)
+	}
+}
+
+func TestFinishSyncCapsHealthyIdleDeadline(t *testing.T) {
+	db := newTestDB(t)
+	serverDB := newTestDB(t)
+	server := testCoordinator(t, serverDB, "secret")
+	mustConnect(t, db, "work", server.URL, "secret", "#dev")
+	r, err := getRemote(db, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	owner, ok, err := claimSync(db, *r, false, started)
+	if err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	if _, err := db.Exec("UPDATE sync_schedule SET idle_rounds = 100, failures = 7 WHERE remote_name = 'work'"); err != nil {
+		t.Fatal(err)
+	}
+	started = time.Now()
+	if err := finishSync(db, *r, owner, time.Second, SyncStats{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var next int64
+	var idle, failures int
+	if err := db.QueryRow("SELECT next_at, idle_rounds, failures FROM sync_schedule WHERE remote_name='work'").Scan(&next, &idle, &failures); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.UnixMilli(next)
+	if deadline.Before(started.Add(2*time.Second-time.Millisecond)) || deadline.After(time.Now().Add(2400*time.Millisecond)) {
+		t.Fatalf("idle deadline outside positive-jitter cap: %v", deadline.Sub(started))
+	}
+	if idle != 101 || failures != 0 {
+		t.Fatalf("idle/failure counters: idle=%d failures=%d", idle, failures)
+	}
+	if _, err := db.Exec("UPDATE sync_schedule SET idle_rounds = 100 WHERE remote_name='work'"); err != nil {
+		t.Fatal(err)
+	}
+	owner, ok, err = claimSync(db, *r, true, time.Now())
+	if err != nil || !ok {
+		t.Fatalf("custom-base claim: ok=%v err=%v", ok, err)
+	}
+	started = time.Now()
+	if err := finishSync(db, *r, owner, 10*time.Second, SyncStats{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT next_at FROM sync_schedule WHERE remote_name='work'").Scan(&next); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.UnixMilli(next)
+	if deadline.Before(started.Add(10*time.Second-time.Millisecond)) || deadline.After(time.Now().Add(12*time.Second)) {
+		t.Fatalf("custom base interval was not preserved: %v", deadline.Sub(started))
+	}
+	if _, err := db.Exec("UPDATE sync_schedule SET idle_rounds = 100 WHERE remote_name='work'"); err != nil {
+		t.Fatal(err)
+	}
+	owner, ok, err = claimSync(db, *r, true, time.Now())
+	if err != nil || !ok {
+		t.Fatalf("traffic claim: ok=%v err=%v", ok, err)
+	}
+	if err := finishSync(db, *r, owner, time.Second, SyncStats{Pulled: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow("SELECT idle_rounds FROM sync_schedule WHERE remote_name='work'").Scan(&idle); err != nil || idle != 0 {
+		t.Fatalf("traffic did not reset idle rounds: %d %v", idle, err)
 	}
 }

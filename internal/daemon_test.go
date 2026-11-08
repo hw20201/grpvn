@@ -83,6 +83,59 @@ func TestDaemonPullsAndPushesWithoutAgentCommands(t *testing.T) {
 	}
 }
 
+func TestDaemonImportsMessageAfterHighIdlePoll(t *testing.T) {
+	serverDB := newTestDB(t)
+	server := testCoordinator(t, serverDB, "secret")
+	client := newTestDB(t)
+	mustConnect(t, client, "work", server.URL, "secret", "#dev")
+	if _, err := SyncDue(context.Background(), client, "", 250*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	r, err := getRemote(client, "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, ok, err := claimSync(client, *r, true, time.Now())
+	if err != nil || !ok {
+		t.Fatalf("claim high-idle sync: ok=%v err=%v", ok, err)
+	}
+	if _, err := client.Exec("UPDATE sync_schedule SET idle_rounds = 100 WHERE remote_name='work'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishSync(client, *r, owner, 250*time.Millisecond, SyncStats{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	var rounds int
+	if err := client.QueryRow("SELECT idle_rounds FROM sync_schedule WHERE remote_name='work'").Scan(&rounds); err != nil || rounds < 101 {
+		t.Fatalf("high-idle sync did not complete: rounds=%d err=%v", rounds, err)
+	}
+	startTestDaemon(t, client, 250*time.Millisecond)
+	daemonEventually(t, func() bool {
+		var current int
+		err := client.QueryRow("SELECT idle_rounds FROM sync_schedule WHERE remote_name='work'").Scan(&current)
+		return err == nil && current >= 102
+	})
+	if _, err := Send(serverDB, "alice", "#dev", "arrived after idle poll", "", false); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var count int
+		err := client.QueryRow("SELECT COUNT(*) FROM messages WHERE target='#work/dev' AND body=?", []byte("arrived after idle poll")).Scan(&count)
+		if err == nil && count == 1 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("message not imported within five seconds")
+		case <-ticker.C:
+		}
+	}
+}
+
 func TestDaemonLeaseAndAutomaticSyncFallback(t *testing.T) {
 	serverDB := newTestDB(t)
 	server := testCoordinator(t, serverDB, "")
