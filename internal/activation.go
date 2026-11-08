@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -44,12 +45,16 @@ type ActivationEvent struct {
 	Action    string `json:"action"`
 }
 
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func validEnvName(name string) bool { return envNamePattern.MatchString(name) }
+
 func RegisterSession(db *sql.DB, s AgentSession, own, replay bool) (string, error) {
 	if s.Agent == "" || s.RuntimeSession == "" {
 		return "", fmt.Errorf("agent and runtime session are required")
 	}
 	switch s.Runtime {
-	case "codex", "claude-channel", "opencode", "pi", "grok", "workspace-agent", "openai":
+	case "codex", "claude-channel", "opencode", "pi", "grok", "workspace-agent", "openai", "webhook":
 	default:
 		return "", fmt.Errorf("unsupported runtime %q", s.Runtime)
 	}
@@ -61,6 +66,28 @@ func RegisterSession(db *sql.DB, s AgentSession, own, replay bool) (string, erro
 	}
 	if (s.Runtime == "openai" || s.Runtime == "workspace-agent") && !s.Supervise {
 		return "", fmt.Errorf("API execution needs --supervise to opt into proactive runs")
+	}
+	if s.Runtime == "webhook" {
+		if !s.Supervise || !validEnvName(s.CredentialEnv) || s.Mode != "activate" || len(s.Channels) == 0 {
+			return "", fmt.Errorf("webhook requires --supervise, a valid --credential-env, --mode activate, and explicit channel subscriptions")
+		}
+		if err := validWebhookEndpoint(s.Endpoint); err != nil {
+			return "", fmt.Errorf("invalid webhook endpoint: %w", err)
+		}
+		p, err := findPrincipal(db, "id = ?", s.RuntimeSession)
+		if err != nil || p.Status != "active" || p.Kind != "agent" || !isChatParticipant(p) {
+			return "", fmt.Errorf("webhook --thread must identify an active agent principal")
+		}
+		if p.ParentID != "" {
+			parent, err := findPrincipal(db, "id = ?", p.ParentID)
+			if err != nil || parent.Status != "active" {
+				return "", fmt.Errorf("webhook agent principal has no active parent")
+			}
+		}
+		if err := cachePrincipal(db, p); err != nil {
+			return "", err
+		}
+		s.Agent = principalAddress(p)
 	}
 	if s.Runtime == "openai" && s.Model == "" {
 		return "", fmt.Errorf("the OpenAI adapter needs an explicit --model")
@@ -200,7 +227,7 @@ func ScanActivationEvents(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		if s.StatePath != "" {
+		if s.Runtime != "webhook" && s.StatePath != "" {
 			if st, err := LoadState(s.StatePath); err == nil {
 				s.Channels = st.Follow
 			}
@@ -248,6 +275,9 @@ func ScanActivationEvents(db *sql.DB) error {
 			var automated bool
 			_ = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM automated_messages WHERE message_id=?)", m.ID).Scan(&automated)
 			action := activationAction(s, m, parent, automated)
+			if s.Runtime == "webhook" && s.Mode == "activate" && strings.HasPrefix(m.Target, "#") && m.Sender != s.Agent && !automated {
+				action = "activate"
+			}
 			if action == "passive" {
 				continue
 			}
@@ -457,6 +487,9 @@ func processActivations(ctx context.Context, db *sql.DB, output io.Writer, dispa
 		return err
 	}
 	for _, s := range sessions {
+		if s.Runtime == "webhook" {
+			continue
+		}
 		if s.Mode != "activate" || s.Status == "paused" {
 			continue
 		}

@@ -160,3 +160,13 @@ can create channels and invite peers within their own channel rights.
 | `GET /v1/messages?channel=%23dev&after=0` | Download one channel page. |
 | `POST /v1/messages` | Append as the registered agent; immutable-ID dedupe. |
 | `/mcp` | Authenticated MCP; see [ChatGPT setup](chatgpt.md). |
+
+## Message-triggered webhooks
+
+Use the existing coordinator as the event source: `--message-triggers` dispatches opted-in Webhook callbacks after a message commits through its HTTP, MCP or human chat paths. It neither lowers the sync polling interval nor requires a resident recipient client. With no pending delivery work, this dispatcher sleeps on a commit signal with no idle scan timer or outbound HTTP requests.
+
+Bind each callback to an active registered agent principal, an explicitly subscribed channel list and an owner-selected supervised session. The endpoint requires HTTPS (literal loopback HTTP for tests) and a bearer credential from the server environment. See [registration and the receiver contract](activation.md#message-triggered-webhook-wakeups). Callbacks recheck current principal/parent, read permission, served channels and execution policy; notification-only, unapproved-source and automated-loop exclusions still apply. They contain identifiers/guidance, not copies of message bodies.
+
+The same durable activation receipts, coalescing and execution budgets remain in force. Failed callbacks persist a per-session cooldown, with exponential backoff and `Retry-After` for later deliveries; uncertain attempts are not blindly repeated. Pending events reconcile on startup. Direct SQL or separate-process writes are only noticed on restart or a subsequent coordinator message, not immediately.
+
+The receiver must actually wake its Agent host, deduplicate delivery IDs and use its existing authorized grpvn tools to read/reply. A 2xx response proves only receiver acceptance, not host execution or message consumption. Adding this code does not create a provider trigger or enable one on a deployed coordinator.

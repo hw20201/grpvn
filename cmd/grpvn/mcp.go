@@ -23,6 +23,7 @@ var serveOpenFlag, servePrivateFlag bool
 var serveOpenChannelsFlag, servePrivateChannelsFlag []string
 var servePublicURLFlag string
 var serveClaudeChannel bool
+var serveMessageTriggers bool
 var serveWeb bool
 var serveSession, serveActivationMode string
 
@@ -38,7 +39,7 @@ var serveCmd = &cobra.Command{
 		if serveActivationMode != "passive" && serveActivationMode != "notify" && serveActivationMode != "activate" {
 			return fmt.Errorf("--activation must be passive, notify or activate")
 		}
-		if listenFlag == "" && (cmd.Flags().Changed("web") || cmd.Flags().Changed("open") || cmd.Flags().Changed("private") || cmd.Flags().Changed("open-channel") || cmd.Flags().Changed("private-channel") || cmd.Flags().Changed("public-url") || cmd.Flags().Changed("channel") || cmd.Flags().Changed("token")) {
+		if listenFlag == "" && (cmd.Flags().Changed("message-triggers") || cmd.Flags().Changed("web") || cmd.Flags().Changed("open") || cmd.Flags().Changed("private") || cmd.Flags().Changed("open-channel") || cmd.Flags().Changed("private-channel") || cmd.Flags().Changed("public-url") || cmd.Flags().Changed("channel") || cmd.Flags().Changed("token")) {
 			return fmt.Errorf("HTTP coordinator options require --listen")
 		}
 		return nil
@@ -77,12 +78,13 @@ func serveCoordinator(ctx context.Context) error {
 		return err
 	}
 	defer db.Close()
-	handler, err := internal.CoordinatorHandler(db, internal.CoordinatorOptions{
+	options := internal.CoordinatorOptions{
 		PublicURL: servePublicURLFlag,
 		Web:       serveWeb,
 		Channels:  serveChannelsFlag, Open: serveOpenFlag,
 		OpenChannels: serveOpenChannelsFlag, PrivateChannels: servePrivateChannelsFlag,
-	})
+	}
+	handler, err := internal.CoordinatorHandler(db, options)
 	if err != nil {
 		return err
 	}
@@ -94,6 +96,13 @@ func serveCoordinator(ctx context.Context) error {
 	fmt.Fprintf(os.Stderr, "grpvn coordinator listening on %s\n", listener.Addr())
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if serveMessageTriggers {
+		triggerStop, e := internal.StartMessageTriggers(ctx, db, options, os.Stderr)
+		if e != nil {
+			return e
+		}
+		defer triggerStop()
+	}
 	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second}
 	done := make(chan struct{})
 	shutdownDone := make(chan struct{})
@@ -119,6 +128,7 @@ func serveCoordinator(ctx context.Context) error {
 }
 
 func init() {
+	serveCmd.Flags().BoolVar(&serveMessageTriggers, "message-triggers", false, "dispatch opted-in webhook activations on committed messages")
 	serveCmd.Flags().BoolVar(&serveWeb, "web", false, "serve the human web app alongside the coordinator (requires --listen)")
 	serveCmd.Flags().BoolVar(&serveClaudeChannel, "claude-channel", false, "expose native Claude Channel notifications (requires host opt-in)")
 	serveCmd.Flags().StringVar(&serveSession, "session", "", "stable native session ID for the Claude Channel bridge")

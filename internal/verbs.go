@@ -308,6 +308,7 @@ func SendIdempotent(db *sql.DB, sender string, targetArg string, bodyArg string,
 	if err := tx.Commit(); err != nil {
 		return nil, false, err
 	}
+	signalCommittedMessage(db)
 	return m, false, nil
 }
 

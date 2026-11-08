@@ -389,5 +389,6 @@ func sendRegistered(db *sql.DB, p *Principal, target, body, key string) (*Messag
 	if err := tx.Commit(); err != nil {
 		return nil, false, err
 	}
+	signalCommittedMessage(db)
 	return m, false, nil
 }
